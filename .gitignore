@@ -20,3 +20,9 @@ Thumbs.db
 *.token
 cf_*.txt
 service_token*.json
+
+# Local working artifacts (don't commit)
+*.bak
+*.bak.*
+*.prefix
+*.tmp
