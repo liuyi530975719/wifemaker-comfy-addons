@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ComfyUI runtime cruft
+*.log
+restart.log
+.ComfyUI_temp/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+
+# Secrets — NEVER commit
+.env
+*.token
+cf_*.txt
+service_token*.json
