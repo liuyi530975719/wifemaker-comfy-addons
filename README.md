@@ -1,3 +1,42 @@
+
+---
+
+## ðŸš€ New ComfyUI Server -- one-line deploy
+
+Spin up a fresh Linux+GPU box (vast.ai, Lambda, etc), SSH in, then:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/liuyi530975719/wifemaker-comfy-addons/main/deploy.sh \
+  | bash -s -- \
+    --tunnel-name mynew5090 \
+    --subdomain mynew5090a.bestyiever.vip \
+    --subdomain-b mynew5090b.bestyiever.vip \
+    --pull-loras '*' \
+    --pull-checkpoint 'unholyDesireMixSinister_v80.safetensors'
+```
+
+9 phases, all idempotent:
+1. Verify GPU + disk + Python
+2. Clone ComfyUI to /workspace/ComfyUI
+3. Install Python deps + 7 public custom nodes
+4. Install private addons (uploader + lora_cleaner)
+5. Write dual-GPU start script (auto-detected)
+6. Start ComfyUI processes
+7. Pull LoRAs / checkpoints from R2 (matching globs)
+8. Set up Cloudflare Tunnel (interactive `tunnel login` step)
+9. Print fleet-registration cheatsheet (CF Access + wifemaker + waifumaster)
+
+Set R2 creds first if pulling models:
+
+```bash
+export R2_ACCESS_KEY_ID=...
+export R2_SECRET_ACCESS_KEY=...
+```
+
+For details on each phase, see [NEW_SERVER_RUNBOOK.md](./NEW_SERVER_RUNBOOK.md).
+
+---
+
 # wifemaker-comfy-addons
 
 Two custom-node packs that pair with [anime-comfyui-studio](https://github.com/liuyi530975719/wifemaker) to give every ComfyUI rig in your fleet:
@@ -7,7 +46,7 @@ Two custom-node packs that pair with [anime-comfyui-studio](https://github.com/l
 | `comfy_model_uploader/` | HTTP endpoints for **uploading models / LoRAs / VAEs** to the rig from the studio (chunked upload, model-list, folder-paths cache refresh, hot-restart) |
 | `comfy_lora_cleaner/` | HTTP endpoints for **inspecting and deleting non-SDXL LoRAs** so SD1.5/SD2 leftovers don't fail your SDXL workflows |
 
-Both are pure Python â€?no compiled deps. They register routes via ComfyUI's `PromptServer.instance.routes`.
+Both are pure Python ï¿½?no compiled deps. They register routes via ComfyUI's `PromptServer.instance.routes`.
 
 ---
 
@@ -55,8 +94,8 @@ Both should return JSON.
 
 ```
 POST  /upload/model              # one-shot multipart upload (small files)
-POST  /upload/model/chunk        # chunked upload (â‰?0 MB)
-GET   /upload/model/chunk_status?upload_id=â€?GET   /upload/model/info         # version + capabilities
+POST  /upload/model/chunk        # chunked upload (ï¿½?0 MB)
+GET   /upload/model/chunk_status?upload_id=ï¿½?GET   /upload/model/info         # version + capabilities
 GET   /upload/model/list?type=loras
 POST  /upload/model/refresh      # clear folder_paths cache (no restart)
 POST  /upload/model/restart      # hot-restart ComfyUI; logs to restart.log
@@ -78,7 +117,7 @@ See each addon's own `README.txt` for full details.
 
 ## Restart behavior
 
-Some rigs need a clean restart after install. The uploader's `/upload/model/restart` endpoint will do this for you remotely â€?but the first time, you need to restart manually so ComfyUI registers the addons in the first place.
+Some rigs need a clean restart after install. The uploader's `/upload/model/restart` endpoint will do this for you remotely ï¿½?but the first time, you need to restart manually so ComfyUI registers the addons in the first place.
 
 ```bash
 # systemd
@@ -105,7 +144,7 @@ Personal use, no warranty. Don't redistribute without removing your service-toke
 ## Fork checklist after pushing to your GitHub
 
 1. Replace **all** `liuyi530975719` strings in `README.md` and `install.sh` with your GitHub username
-2. (Optional) make the repo private â€?but then the curl one-liner needs a PAT:
+2. (Optional) make the repo private ï¿½?but then the curl one-liner needs a PAT:
    ```bash
    curl -fsSL -H "Authorization: token $GITHUB_PAT" \
      https://raw.githubusercontent.com/<USER>/wifemaker-comfy-addons/main/install.sh | bash
