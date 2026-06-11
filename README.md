@@ -1,6 +1,6 @@
 # wifemaker-comfy-addons
 
-Two custom-node packs that pair with [anime-comfyui-studio](https://github.com/bestyiever/wifemaker) to give every ComfyUI rig in your fleet:
+Two custom-node packs that pair with [anime-comfyui-studio](https://github.com/liuyi530975719/wifemaker) to give every ComfyUI rig in your fleet:
 
 | Addon | What it adds |
 |---|---|
@@ -14,20 +14,20 @@ Both are pure Python â€?no compiled deps. They register routes via ComfyUI's `Pr
 ## One-line install on a fresh rig
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bestyiever/wifemaker-comfy-addons/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/liuyi530975719/wifemaker-comfy-addons/main/install.sh | bash
 ```
 
 ### With explicit ComfyUI dir
 
 ```bash
 COMFY_DIR=/workspace/ComfyUI \
-  curl -fsSL https://raw.githubusercontent.com/bestyiever/wifemaker-comfy-addons/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/liuyi530975719/wifemaker-comfy-addons/main/install.sh | bash
 ```
 
 ### After a normal `git clone`
 
 ```bash
-git clone https://github.com/bestyiever/wifemaker-comfy-addons.git
+git clone https://github.com/liuyi530975719/wifemaker-comfy-addons.git
 cd wifemaker-comfy-addons
 bash install.sh
 ```
@@ -104,7 +104,7 @@ Personal use, no warranty. Don't redistribute without removing your service-toke
 
 ## Fork checklist after pushing to your GitHub
 
-1. Replace **all** `bestyiever` strings in `README.md` and `install.sh` with your GitHub username
+1. Replace **all** `liuyi530975719` strings in `README.md` and `install.sh` with your GitHub username
 2. (Optional) make the repo private â€?but then the curl one-liner needs a PAT:
    ```bash
    curl -fsSL -H "Authorization: token $GITHUB_PAT" \

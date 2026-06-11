@@ -1,11 +1,11 @@
 # Push this folder to GitHub
 
 ```powershell
-# 1) Set username (replace bestyiever first in README.md + install.sh)
+# 1) Set username (replace liuyi530975719 first in README.md + install.sh)
 cd C:\Users\besty\Desktop\wifemaker-comfy-addons
 # Use VS Code's find-and-replace or:
-(Get-Content README.md)  -replace 'bestyiever','YourGitHubUsername' | Set-Content README.md
-(Get-Content install.sh) -replace 'bestyiever','YourGitHubUsername' | Set-Content install.sh
+(Get-Content README.md)  -replace 'liuyi530975719','YourGitHubUsername' | Set-Content README.md
+(Get-Content install.sh) -replace 'liuyi530975719','YourGitHubUsername' | Set-Content install.sh
 
 # 2) Init git + first commit
 git init

@@ -21,7 +21,7 @@
 set -euo pipefail
 
 # ── Config �?EDIT THIS LINE after you push to your own repo ─────────
-REPO_URL="${REPO_URL:-https://github.com/bestyiever/wifemaker-comfy-addons}"
+REPO_URL="${REPO_URL:-https://github.com/liuyi530975719/wifemaker-comfy-addons}"
 BRANCH="${BRANCH:-main}"
 
 C='\033[0;36m'; G='\033[0;32m'; Y='\033[0;33m'; R='\033[0;31m'; N='\033[0m'
