@@ -816,4 +816,362 @@ async def _cleanup_partials_handler(request):
                     if mtime > cutoff: continue
                     try:
                         sz = os.path.getsize(full)
-                       
+                        os.remove(full)
+                        removed.append({"path": full, "size": sz, "type": t,
+                                         "age_min": round((_t.time()-mtime)/60, 1)})
+                    except Exception as e:
+                        failed.append({"path": full, "error": str(e)})
+    return web.json_response({"ok": True, "removed": removed, "failed": failed,
+                               "total_freed_bytes": sum(r["size"] for r in removed),
+                               "min_age_min": min_age_min, "active_tmps_skipped": len(active_tmps)})
+
+
+async def _cleanup_outputs_handler(request):
+    """POST /upload/model/cleanup_outputs [{keep_last_n, min_age_min, dry_run, subdir}]
+    Walks ComfyUI's output/ folder recursively, keeps the newest `keep_last_n`
+    image files (default 100) plus anything younger than `min_age_min` minutes
+    (default 30 — safety so freshly-generated images can still be fetched by
+    the wifemaker/waifumaster client before deletion), and removes the rest.
+    Returns a summary + first 20 deleted paths.
+
+    Safe extensions only: .png .jpg .jpeg .webp .gif .mp4 .webm .json
+    Dry-run mode (dry_run=true) reports what would be deleted without acting."""
+    if folder_paths is None:
+        return web.json_response({"error":"folder_paths unavailable"}, status=500)
+    try: body = await request.json()
+    except Exception: body = {}
+    try: keep_last_n = max(0, int(body.get("keep_last_n", 100)))
+    except Exception: keep_last_n = 100
+    try: min_age_min = max(0, int(body.get("min_age_min", 30)))
+    except Exception: min_age_min = 30
+    dry_run = bool(body.get("dry_run", False))
+    subdir_filter = (body.get("subdir") or "").strip()
+
+    SAFE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp4", ".webm",
+                 ".json"}
+
+    try:
+        output_dir = folder_paths.get_output_directory()
+    except Exception:
+        return web.json_response({"error":"output_directory unavailable"}, status=500)
+
+    if not (output_dir and os.path.isdir(output_dir)):
+        return web.json_response({"error": f"output dir not found: {output_dir!r}"}, status=500)
+
+    import time as _t
+    cutoff_age = _t.time() - (min_age_min * 60)
+
+    candidates = []
+    for dirpath, _dirs, files in os.walk(output_dir):
+        if subdir_filter and subdir_filter not in dirpath:
+            continue
+        for fn in files:
+            ext = os.path.splitext(fn)[1].lower()
+            if ext not in SAFE_EXTS: continue
+            full = os.path.join(dirpath, fn)
+            try:
+                mtime = os.path.getmtime(full)
+                size = os.path.getsize(full)
+            except Exception:
+                continue
+            candidates.append((mtime, full, size))
+
+    candidates.sort(key=lambda r: r[0], reverse=True)
+
+    keep_set = set()
+    for mtime, full, size in candidates[:keep_last_n]:
+        keep_set.add(full)
+    for mtime, full, size in candidates:
+        if mtime > cutoff_age:
+            keep_set.add(full)
+
+    deletable = [(m, f, s) for (m, f, s) in candidates if f not in keep_set]
+
+    removed = []
+    failed = []
+    total_freed = 0
+    for mtime, full, size in deletable:
+        rel = os.path.relpath(full, output_dir)
+        if dry_run:
+            removed.append({
+                "path": rel, "size": size,
+                "age_min": round((_t.time() - mtime) / 60, 1),
+                "dry_run": True,
+            })
+            total_freed += size
+        else:
+            try:
+                os.remove(full)
+                removed.append({
+                    "path": rel, "size": size,
+                    "age_min": round((_t.time() - mtime) / 60, 1),
+                })
+                total_freed += size
+            except Exception as e:
+                failed.append({"path": rel, "error": str(e)})
+
+    # Clean empty subdirs
+    if not dry_run:
+        for dirpath, dirs, files in os.walk(output_dir, topdown=False):
+            if dirpath == output_dir: continue
+            try:
+                if not os.listdir(dirpath):
+                    os.rmdir(dirpath)
+            except Exception:
+                pass
+
+    return web.json_response({
+        "ok": True,
+        "output_dir": output_dir,
+        "scanned": len(candidates),
+        "kept": len(keep_set),
+        "removed_count": len(removed),
+        "failed_count": len(failed),
+        "total_freed_bytes": total_freed,
+        "total_freed_mb": round(total_freed / 1024 / 1024, 1),
+        "removed_sample": removed[:20],
+        "failed": failed[:20],
+        "dry_run": dry_run,
+        "policy": {
+            "keep_last_n": keep_last_n,
+            "min_age_min": min_age_min,
+            "subdir_filter": subdir_filter,
+        },
+    })
+
+
+# Background auto-cleanup. Runs every 6 hours; keeps last 100 + anything < 30min old.
+_AUTO_CLEANUP_INTERVAL_SEC = 6 * 3600
+_AUTO_CLEANUP_KEEP_LAST = 100
+_AUTO_CLEANUP_MIN_AGE_MIN = 30
+
+
+async def _auto_cleanup_loop():
+    """Background task — periodically prunes output/ to keep last 100 images."""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            if folder_paths is not None:
+                output_dir = folder_paths.get_output_directory()
+                if output_dir and os.path.isdir(output_dir):
+                    import time as _t
+                    cutoff = _t.time() - (_AUTO_CLEANUP_MIN_AGE_MIN * 60)
+                    candidates = []
+                    for dirpath, _dirs, files in os.walk(output_dir):
+                        for fn in files:
+                            ext = os.path.splitext(fn)[1].lower()
+                            if ext not in {".png", ".jpg", ".jpeg", ".webp",
+                                           ".gif", ".mp4", ".webm", ".json"}:
+                                continue
+                            full = os.path.join(dirpath, fn)
+                            try: mtime = os.path.getmtime(full)
+                            except Exception: continue
+                            candidates.append((mtime, full))
+                    candidates.sort(key=lambda r: r[0], reverse=True)
+                    keep = set(f for _, f in candidates[:_AUTO_CLEANUP_KEEP_LAST])
+                    keep.update(f for m, f in candidates if m > cutoff)
+                    removed = 0
+                    freed = 0
+                    for _m, full in candidates:
+                        if full in keep: continue
+                        try:
+                            sz = os.path.getsize(full)
+                            os.remove(full)
+                            removed += 1
+                            freed += sz
+                        except Exception: pass
+                    if removed > 0:
+                        print(f"[comfy_model_uploader] auto-cleanup: removed {removed} files, freed {freed/1024/1024:.1f}MB from {output_dir}", flush=True)
+        except Exception as e:
+            print(f"[comfy_model_uploader] auto-cleanup error: {e}", flush=True)
+        await asyncio.sleep(_AUTO_CLEANUP_INTERVAL_SEC)
+
+
+async def _from_url_jobs_handler(_request):
+    """GET /upload/model/from_url/jobs → list every download job seen (running + finished)."""
+    import time as _t
+    out = []
+    now = _t.time()
+    for jid, st in list(_URL_DOWNLOADS.items()):
+        out.append({
+            "job_id": jid, "status": st["status"],
+            "filename": st["filename"], "type": st["type"],
+            "downloaded": st["downloaded"], "total": st["total"],
+            "error": st["error"],
+            "started_at": st["started_at"],
+            "elapsed_sec": round((st["finished_at"] or now) - st["started_at"], 1),
+        })
+    return web.json_response({"ok": True, "jobs": out, "count": len(out)})
+
+
+async def _addon_upload_handler(request):
+    """POST /upload/addon (multipart)
+    Fields:
+      name       — addon folder name (must be safe; alpha/num/dash/underscore only)
+      tarball    — the .tar.gz file content (the WHOLE addon dir, with __init__.py inside)
+      restart    — "1" / "true" to auto-restart ComfyUI after extraction
+
+    Behavior:
+      • Extracts tarball into <ComfyUI>/custom_nodes/<name>/ (overwrites)
+      • Creates a backup at custom_nodes/<name>.bak.<timestamp>/ first
+      • Optionally schedules a watchdog-aware restart via _restart_handler
+    Used by waifumaster admin's "Sync uploader to fleet" button — the
+    dev-box edits the addon locally, tests on its own ComfyUI, then
+    pushes the working version to every fleet server with one click."""
+    if folder_paths is None:
+        return web.json_response({"error": "folder_paths unavailable"}, status=500)
+    try:
+        comfy_root = os.path.dirname(os.path.dirname(os.path.abspath(folder_paths.__file__)))
+    except Exception:
+        return web.json_response({"error": "couldn't locate ComfyUI root"}, status=500)
+    custom_nodes_dir = os.path.join(comfy_root, "custom_nodes")
+    if not os.path.isdir(custom_nodes_dir):
+        return web.json_response({"error": f"custom_nodes dir not found: {custom_nodes_dir}"}, status=500)
+
+    reader = await request.multipart()
+    name = ""
+    tar_bytes = b""
+    restart_after = False
+    while True:
+        field = await reader.next()
+        if field is None: break
+        if field.name == "name":
+            name = (await field.text()).strip()
+        elif field.name == "restart":
+            restart_after = (await field.text()).strip() in ("1", "true", "yes", "on")
+        elif field.name == "tarball":
+            buf = b""
+            while True:
+                chunk = await field.read_chunk(CHUNK)
+                if not chunk: break
+                buf += chunk
+            tar_bytes = buf
+            break
+
+    # Validate name — only safe chars to prevent path traversal
+    import re as _re
+    if not name or not _re.match(r'^[A-Za-z0-9_\-]+$', name):
+        return web.json_response({"error": "invalid name (alphanumeric + dash + underscore only)"}, status=400)
+    if not tar_bytes:
+        return web.json_response({"error": "no tarball uploaded"}, status=400)
+
+    import io as _io, tarfile as _tarfile, time as _t, shutil as _shutil
+    target = os.path.join(custom_nodes_dir, name)
+    backup = os.path.join(custom_nodes_dir, f"{name}.bak.{int(_t.time())}")
+
+    # Extract to a tmp dir first, then atomic-rename
+    tmp_extract = os.path.join(custom_nodes_dir, f".{name}.staging.{int(_t.time())}")
+    try:
+        os.makedirs(tmp_extract, exist_ok=True)
+        with _tarfile.open(fileobj=_io.BytesIO(tar_bytes), mode="r:gz") as tf:
+            # Sanity check — refuse if any member tries to escape via .. or absolute path
+            for m in tf.getmembers():
+                if m.name.startswith("/") or ".." in m.name.split("/"):
+                    raise RuntimeError(f"refusing tarball member with traversal: {m.name}")
+            tf.extractall(tmp_extract)
+        # Tarball usually has the addon dir as the root, e.g. comfy_model_uploader/__init__.py.
+        # Detect that and unwrap one level if needed so we end up with __init__.py directly under target.
+        entries = os.listdir(tmp_extract)
+        if len(entries) == 1 and os.path.isdir(os.path.join(tmp_extract, entries[0])):
+            inner = os.path.join(tmp_extract, entries[0])
+            if os.path.isfile(os.path.join(inner, "__init__.py")):
+                # Move inner contents up to tmp_extract
+                for sub in os.listdir(inner):
+                    _shutil.move(os.path.join(inner, sub), os.path.join(tmp_extract, sub))
+                os.rmdir(inner)
+        if not os.path.isfile(os.path.join(tmp_extract, "__init__.py")):
+            raise RuntimeError("tarball missing __init__.py at the top level")
+
+        # Backup existing then swap
+        if os.path.isdir(target):
+            try: _shutil.rmtree(backup, ignore_errors=True)
+            except Exception: pass
+            os.rename(target, backup)
+        os.rename(tmp_extract, target)
+    except Exception as e:
+        # Cleanup tmp on failure
+        try: _shutil.rmtree(tmp_extract, ignore_errors=True)
+        except Exception: pass
+        return web.json_response({"error": f"extract failed: {e}", "name": name}, status=500)
+
+    # Count installed files
+    file_count = 0
+    total_bytes = 0
+    for dirpath, _dirs, files in os.walk(target):
+        for fn in files:
+            file_count += 1
+            try: total_bytes += os.path.getsize(os.path.join(dirpath, fn))
+            except Exception: pass
+
+    resp = {
+        "ok": True,
+        "name": name,
+        "path": target,
+        "backup": backup if os.path.isdir(backup) else None,
+        "files_installed": file_count,
+        "total_bytes": total_bytes,
+        "restart_scheduled": False,
+    }
+
+    if restart_after:
+        # Reuse the existing restart machinery (same as _restart_handler)
+        try:
+            argv = list(sys.argv)
+            pid = os.getpid()
+            asyncio.get_event_loop().create_task(_schedule_restart(pid, argv))
+            resp["restart_scheduled"] = True
+        except Exception as e:
+            resp["restart_error"] = str(e)
+
+    return web.json_response(resp)
+
+
+async def _schedule_restart(pid: int, argv):
+    """Schedule a ComfyUI restart ~3 seconds out so the HTTP response can return first."""
+    await asyncio.sleep(3)
+    try:
+        import platform
+        if platform.system() == "Windows":
+            os.execv(sys.executable, [sys.executable] + argv)
+        else:
+            os.execv(sys.executable, [sys.executable] + argv)
+    except Exception as e:
+        print(f"[comfy_model_uploader] addon-triggered restart failed: {e}", flush=True)
+
+
+def _register_routes():
+    if PromptServer is None or PromptServer.instance is None:
+        return False
+    routes = PromptServer.instance.routes
+    routes.post("/upload/model")(_upload_handler)
+    routes.post("/upload/model/chunk")(_chunk_handler)
+    routes.get("/upload/model/chunk_status")(_chunk_status_handler)
+    routes.get("/upload/model/info")(_info_handler)
+    routes.get("/upload/model/list")(_list_handler)
+    routes.post("/upload/model/refresh")(_refresh_handler)
+    routes.post("/upload/model/restart")(_restart_handler)
+    routes.get("/upload/model/lora_meta")(_lora_meta_handler)
+    routes.post("/upload/model/from_url")(_from_url_handler)
+    routes.get("/upload/model/from_url/status")(_from_url_status_handler)
+    routes.get("/upload/model/from_url/jobs")(_from_url_jobs_handler)
+    routes.post("/upload/model/cleanup_partials")(_cleanup_partials_handler)
+    routes.post("/upload/model/cleanup_outputs")(_cleanup_outputs_handler)
+    routes.get("/upload/model/serve")(_serve_handler)
+    routes.get("/upload/model/civitai/search")(_civitai_search_handler)
+    routes.post("/upload/addon")(_addon_upload_handler)
+
+    # Kick off the background output-prune loop (keeps last 100 PNGs in output/)
+    try:
+        loop = asyncio.get_event_loop()
+        loop.create_task(_auto_cleanup_loop())
+        print("[comfy_model_uploader] auto-cleanup loop started (every 6h, keep last 100)", flush=True)
+    except Exception as e:
+        print(f"[comfy_model_uploader] couldn't start auto-cleanup loop: {e}", flush=True)
+    return True
+
+
+_registered = _register_routes()
+print(f"[comfy_model_uploader] routes registered: {_registered} (uploader_version=10, supports chunked_upload + restart_v3 + from_url + serve + civitai_proxy + watchdog_aware + cleanup_partials + cleanup_outputs + auto_cleanup + addon_upload)")
+
+NODE_CLASS_MAPPINGS = {}
+NODE_DISPLAY_NAME_MAPPINGS = {}
