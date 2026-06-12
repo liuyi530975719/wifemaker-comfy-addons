@@ -45,19 +45,37 @@ PORT_B=8189        # GPU 1
 
 # ----- Args -----
 TUNNEL_NAME=""
-SUBDOMAIN_A=""
-SUBDOMAIN_B=""
+SUBDOMAINS=()           # N entries -- one per GPU
+SUBDOMAIN_PREFIX=""     # if set, auto-gen N subdomains: <prefix>a.zone, <prefix>b.zone, ...
+SUBDOMAIN_ZONE="bestyiever.vip"
+PORT_START=8190
 PULL_LORAS=()
 PULL_CHECKPOINTS=()
 SKIP_TUNNEL=false
 SKIP_PULL=false
 DRY_RUN=false
+FORCE_GPUS=""           # override GPU count detection
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --tunnel-name)      TUNNEL_NAME="$2"; shift 2 ;;
-    --subdomain)        SUBDOMAIN_A="$2"; shift 2 ;;
-    --subdomain-b)      SUBDOMAIN_B="$2"; shift 2 ;;
+    --tunnel-name)         TUNNEL_NAME="$2"; shift 2 ;;
+    --subdomain|--subdomain-b)
+      # back-compat: --subdomain x  --subdomain-b y  → append to SUBDOMAINS
+      SUBDOMAINS+=("$2"); shift 2
+      ;;
+    --subdomains)
+      # accept space-separated list after the flag, or repeated --subdomains entries
+      shift
+      while [ $# -gt 0 ] && [[ "$1" != --* ]]; do
+        SUBDOMAINS+=("$1"); shift
+      done
+      ;;
+    --subdomain-prefix)    SUBDOMAIN_PREFIX="$2"; shift 2 ;;
+    --subdomain-zone)      SUBDOMAIN_ZONE="$2";   shift 2 ;;
+    --port-start)          PORT_START="$2";       shift 2 ;;
+    --port-a)              PORT_START="$2";       shift 2 ;;   # back-compat alias
+    --port-b)              shift 2 ;;                          # ignored (auto-sequential now)
+    --gpus)                FORCE_GPUS="$2";       shift 2 ;;
     --pull-loras)
       shift
       while [ $# -gt 0 ] && [[ "$1" != --* ]]; do
@@ -74,8 +92,6 @@ while [ $# -gt 0 ]; do
     --skip-pull)   SKIP_PULL=true;   shift ;;
     --dry-run)     DRY_RUN=true;     shift ;;
     --comfy-dir)   COMFY_DIR="$2";   shift 2 ;;
-    --port-a)      PORT_A="$2";      shift 2 ;;
-    --port-b)      PORT_B="$2";      shift 2 ;;
     --help|-h)
       sed -n '2,/^# ====/p' "$0" | sed 's/^# *//'
       exit 0
@@ -114,6 +130,28 @@ fi
 PYV=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 ok "Python: $PYV"
 python3 -c "import torch; print(f'  torch: {torch.__version__}, cuda: {torch.cuda.is_available()}, devices: {torch.cuda.device_count()}, cc: {torch.cuda.get_device_capability(0) if torch.cuda.is_available() else None}')"
+
+# Apply --gpus override or auto-detected count
+if [ -n "$FORCE_GPUS" ]; then
+  GPU_COUNT=$FORCE_GPUS
+  ok "GPU count overridden to: $GPU_COUNT"
+fi
+
+# Build PORTS array: sequential from PORT_START
+PORTS=()
+for ((i=0; i<GPU_COUNT; i++)); do
+  PORTS+=( $((PORT_START + i)) )
+done
+ok "ports planned: ${PORTS[*]}"
+
+# Build SUBDOMAINS array if --subdomain-prefix was given
+if [ ${#SUBDOMAINS[@]} -eq 0 ] && [ -n "$SUBDOMAIN_PREFIX" ]; then
+  _letters=(a b c d e f g h i j k l m n o p q r s t u v w x y z)
+  for ((i=0; i<GPU_COUNT; i++)); do
+    SUBDOMAINS+=( "${SUBDOMAIN_PREFIX}${_letters[$i]}.${SUBDOMAIN_ZONE}" )
+  done
+  ok "subdomains auto-generated: ${SUBDOMAINS[*]}"
+fi
 
 # ============================================================ #
 phase 2 "Clone ComfyUI"
@@ -162,53 +200,52 @@ phase 4 "Install private addons (uploader + lora_cleaner)"
 dryecho "curl -fsSL '$REPO_URL/raw/$BRANCH/install.sh' | COMFY_DIR='$COMFY_DIR' bash"
 
 # ============================================================ #
-phase 5 "Write start script (dual or single GPU)"
+phase 5 "Write start script (N GPUs)"
 # ============================================================ #
 mkdir -p "$LOGS_DIR"
-if [ "$GPU_COUNT" -ge 2 ]; then
-  ok "writing dual-GPU launcher (ports $PORT_A + $PORT_B)"
-  cat > /workspace/start_dual_comfy.sh << EOFSTART
-#!/usr/bin/env bash
-set -e
-cd $COMFY_DIR
-mkdir -p $LOGS_DIR $COMFY_DIR/user-gpu0 $COMFY_DIR/user-gpu1
-pkill -9 -f "main.py --listen" 2>/dev/null || true
-sleep 2
-CUDA_VISIBLE_DEVICES=0 nohup python main.py --listen 0.0.0.0 --port $PORT_A \
-    --user-directory $COMFY_DIR/user-gpu0 > $LOGS_DIR/comfy-gpu0.log 2>&1 &
-CUDA_VISIBLE_DEVICES=1 nohup python main.py --listen 0.0.0.0 --port $PORT_B \
-    --user-directory $COMFY_DIR/user-gpu1 > $LOGS_DIR/comfy-gpu1.log 2>&1 &
-sleep 30
-curl -sf -o /dev/null -w "  $PORT_A HTTP %{http_code}\\n" http://localhost:$PORT_A/system_stats || true
-curl -sf -o /dev/null -w "  $PORT_B HTTP %{http_code}\\n" http://localhost:$PORT_B/system_stats || true
-nvidia-smi --query-gpu=index,memory.used --format=csv,noheader
-EOFSTART
-  chmod +x /workspace/start_dual_comfy.sh
-else
-  ok "writing single-GPU launcher (port $PORT_A)"
-  cat > /workspace/start_comfy.sh << EOFSTART
-#!/usr/bin/env bash
-set -e
-cd $COMFY_DIR
-mkdir -p $LOGS_DIR
-pkill -9 -f "main.py --listen" 2>/dev/null || true
-sleep 2
-nohup python main.py --listen 0.0.0.0 --port $PORT_A \
-    > $LOGS_DIR/comfy.log 2>&1 &
-sleep 30
-curl -sf -o /dev/null -w "  $PORT_A HTTP %{http_code}\\n" http://localhost:$PORT_A/system_stats || true
-EOFSTART
-  chmod +x /workspace/start_comfy.sh
-fi
+
+LAUNCHER=/workspace/start_all_comfy.sh
+ok "writing $LAUNCHER for $GPU_COUNT GPU(s)"
+
+# Build the launcher dynamically using printf (no quote-collision)
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' 'set -e'
+  printf 'cd %s\n' "$COMFY_DIR"
+  printf 'mkdir -p %s\n' "$LOGS_DIR"
+  printf '%s\n' 'pkill -9 -f "main.py --listen" 2>/dev/null || true'
+  printf '%s\n' 'sleep 2'
+  printf '\n'
+  for ((i=0; i<GPU_COUNT; i++)); do
+    P=${PORTS[$i]}
+    UDIR="$COMFY_DIR/user-gpu$i"
+    LOG="$LOGS_DIR/comfy-gpu$i.log"
+    printf 'mkdir -p %s\n' "$UDIR"
+    printf 'CUDA_VISIBLE_DEVICES=%d nohup python main.py --listen 0.0.0.0 --port %d \\\n' "$i" "$P"
+    printf '    --user-directory %s > %s 2>&1 &\n' "$UDIR" "$LOG"
+    printf 'echo "GPU %d (port %d) started: PID $!"\n' "$i" "$P"
+    printf '\n'
+  done
+  printf '%s\n' 'echo "Waiting 30s for ComfyUI to come up..."'
+  printf '%s\n' 'sleep 30'
+  printf '\n'
+  printf '%s\n' 'echo "=== Port check ==="'
+  for ((i=0; i<GPU_COUNT; i++)); do
+    P=${PORTS[$i]}
+    printf 'curl -sf -o /dev/null -w "  port %d HTTP %%{http_code}\\n" http://localhost:%d/system_stats || echo "  port %d NO RESP"\n' "$P" "$P" "$P"
+  done
+  printf '\n'
+  printf '%s\n' 'echo "=== GPU memory ==="'
+  printf '%s\n' 'nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv,noheader'
+} > "$LAUNCHER"
+chmod +x "$LAUNCHER"
+LAUNCHER_LINES=$(wc -l < "$LAUNCHER")
+ok "launcher written ($LAUNCHER_LINES lines)"
 
 # ============================================================ #
 phase 6 "Start ComfyUI"
 # ============================================================ #
-if [ "$GPU_COUNT" -ge 2 ]; then
-  dryecho "bash /workspace/start_dual_comfy.sh"
-else
-  dryecho "bash /workspace/start_comfy.sh"
-fi
+dryecho "bash /workspace/start_all_comfy.sh"
 
 # ============================================================ #
 phase 7 "Pull LoRA / checkpoint from R2"
@@ -283,30 +320,24 @@ install_cloudflared() {
 }
 
 write_config_file() {
-  # Writes ~/.cloudflared/config.yml with $TID, $SUBDOMAIN_A/B, $PORT_A/B
+  # Writes ~/.cloudflared/config.yml with $tid + N ingress rules (one per subdomain)
   local tid="$1"
   CONFIG_FILE=~/.cloudflared/config.yml
   mkdir -p ~/.cloudflared
-  cat > "$CONFIG_FILE" << EOFCFG
-tunnel: $tid
-credentials-file: /root/.cloudflared/${tid}.json
-ingress:
-  - hostname: $SUBDOMAIN_A
-    service: http://localhost:$PORT_A
-EOFCFG
-  if [ -n "$SUBDOMAIN_B" ]; then
-    cat >> "$CONFIG_FILE" << EOFCFG
-  - hostname: $SUBDOMAIN_B
-    service: http://localhost:$PORT_B
-EOFCFG
-  fi
-  cat >> "$CONFIG_FILE" << EOFCFG
-  - service: http_status:404
-EOFCFG
-  ok "wrote tunnel config: $CONFIG_FILE"
+  {
+    echo "tunnel: $tid"
+    echo "credentials-file: /root/.cloudflared/${tid}.json"
+    echo "ingress:"
+    for ((i=0; i<${#SUBDOMAINS[@]} && i<${#PORTS[@]}; i++)); do
+      echo "  - hostname: ${SUBDOMAINS[$i]}"
+      echo "    service: http://localhost:${PORTS[$i]}"
+    done
+    echo "  - service: http_status:404"
+  } > "$CONFIG_FILE"
+  ok "wrote tunnel config: $CONFIG_FILE (${#SUBDOMAINS[@]} hostnames)"
 }
 
-if [ "$SKIP_TUNNEL" = true ] || ([ -z "$SUBDOMAIN_A" ] && [ -z "${CF_TUNNEL_TOKEN:-}" ]); then
+if [ "$SKIP_TUNNEL" = true ] || ([ ${#SUBDOMAINS[@]} -eq 0 ] && [ -z "${CF_TUNNEL_TOKEN:-}" ]); then
   # ---- Mode C: SKIP ----
   warn "skipping tunnel phase (no --subdomain, no CF_TUNNEL_TOKEN, or --skip-tunnel set)"
   warn "to wire networking later, either:"
@@ -328,8 +359,9 @@ elif [ -n "${CF_TUNNEL_TOKEN:-}" ]; then
   warn "TOKEN MODE limitation: DNS routes (hostname -> tunnel) must be"
   warn "  configured separately in CF dashboard -> Zero Trust -> Networks ->"
   warn "  Tunnels -> <your-tunnel> -> Public Hostnames tab."
-  warn "  Add: hostname=$SUBDOMAIN_A service=http://localhost:$PORT_A"
-  [ -n "$SUBDOMAIN_B" ] && warn "  Add: hostname=$SUBDOMAIN_B service=http://localhost:$PORT_B"
+  for ((i=0; i<GPU_COUNT && i<${#SUBDOMAINS[@]}; i++)); do
+    warn "  Add: hostname=${SUBDOMAINS[$i]} service=http://localhost:${PORTS[$i]}"
+  done
 elif [ -f "/root/.cloudflared/cert.pem" ]; then
   # ---- Mode B: CERT ----
   ok "using CERT mode (/root/.cloudflared/cert.pem found)"
@@ -340,8 +372,9 @@ elif [ -f "/root/.cloudflared/cert.pem" ]; then
   fi
   # Idempotent create -- ignore if already exists
   dryecho "$CLOUDFLARED tunnel create '$TUNNEL_NAME' 2>/dev/null || true"
-  dryecho "$CLOUDFLARED tunnel route dns '$TUNNEL_NAME' '$SUBDOMAIN_A' 2>/dev/null || true"
-  [ -n "$SUBDOMAIN_B" ] && dryecho "$CLOUDFLARED tunnel route dns '$TUNNEL_NAME' '$SUBDOMAIN_B' 2>/dev/null || true"
+  for sd in "${SUBDOMAINS[@]}"; do
+    dryecho "$CLOUDFLARED tunnel route dns '$TUNNEL_NAME' '$sd' 2>/dev/null || true"
+  done
   TID=$(ls ~/.cloudflared/*.json 2>/dev/null | grep -v cert | head -1 | xargs -I{} basename {} .json)
   if [ -z "$TID" ] && ! $DRY_RUN; then
     err "tunnel credentials JSON not found after create -- something failed"
@@ -374,19 +407,19 @@ ${C}========== NEXT MANUAL STEPS ==========${N}
    Add domains: $SUBDOMAIN_A${SUBDOMAIN_B:+ + $SUBDOMAIN_B}
    Attach existing service-token policy (same as comfy.bestyiever.*)
 
-2. Wifemaker -> Servers -> + Add server:
-   URL:       https://$SUBDOMAIN_A
+2. Wifemaker -> Servers -> + Add server (one row per subdomain below):
    Auth:      servicetoken
    cfId:      <YOUR_CF_ACCESS_CLIENT_ID>
    cfSecret:  <YOUR_CF_ACCESS_CLIENT_SECRET>
-$([ -n "$SUBDOMAIN_B" ] && echo "   (Repeat for B subdomain: https://$SUBDOMAIN_B)")
+$(for sd in "${SUBDOMAINS[@]}"; do echo "   - URL: https://$sd"; done)
 
-3. Waifumaster -> /admin -> Servers tab -> + New server (same shape as #2)
+3. Waifumaster -> /admin -> Servers tab -> + New server (one row per subdomain above)
+   Tip: for high-VRAM cards (48GB+) bump max_concurrent to 5
+        for 32GB cards (5090), max_concurrent 3
+        for 16-24GB cards, max_concurrent 2
 
 4. (Optional) verify endpoints from local:
-   curl.exe https://$SUBDOMAIN_A/system_stats
-   curl.exe https://$SUBDOMAIN_A/upload/model/info
-   curl.exe https://$SUBDOMAIN_A/lora_cleaner/info
+$(for sd in "${SUBDOMAINS[@]}"; do echo "   curl.exe https://$sd/system_stats"; done)
 
 5. (If models not pulled here) Use wifemaker Sync Local modal to push the
    models you want from another server. Or re-run install.sh with
@@ -394,10 +427,7 @@ $([ -n "$SUBDOMAIN_B" ] && echo "   (Repeat for B subdomain: https://$SUBDOMAIN_
 
 ${G}Done.${N} ComfyUI is running on:
 EOF_CHEAT
-if [ "$GPU_COUNT" -ge 2 ]; then
-  echo "    localhost:$PORT_A  (GPU 0)"
-  echo "    localhost:$PORT_B  (GPU 1)"
-else
-  echo "    localhost:$PORT_A  (single GPU)"
-fi
+for ((i=0; i<GPU_COUNT; i++)); do
+  echo "    localhost:${PORTS[$i]}  (GPU $i)"
+done
 echo
