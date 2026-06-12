@@ -404,7 +404,7 @@ ${C}========== NEXT MANUAL STEPS ==========${N}
 
 1. CF Access (lock public access):
    https://one.dash.cloudflare.com -> Access -> Applications
-   Add domains: $SUBDOMAIN_A${SUBDOMAIN_B:+ + $SUBDOMAIN_B}
+$(for sd in "${SUBDOMAINS[@]}"; do echo "   Add domain: $sd"; done)
    Attach existing service-token policy (same as comfy.bestyiever.*)
 
 2. Wifemaker -> Servers -> + Add server (one row per subdomain below):
