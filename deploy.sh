@@ -221,7 +221,7 @@ ok "writing $LAUNCHER for $GPU_COUNT GPU(s)"
     UDIR="$COMFY_DIR/user-gpu$i"
     LOG="$LOGS_DIR/comfy-gpu$i.log"
     printf 'mkdir -p %s\n' "$UDIR"
-    printf 'CUDA_VISIBLE_DEVICES=%d nohup python main.py --listen 0.0.0.0 --port %d \\\n' "$i" "$P"
+    printf 'CUDA_VISIBLE_DEVICES=%d nohup python main.py --listen 0.0.0.0 --highvram --port %d \\\n' "$i" "$P"
     printf '    --user-directory %s > %s 2>&1 &\n' "$UDIR" "$LOG"
     printf 'echo "GPU %d (port %d) started: PID $!"\n' "$i" "$P"
     printf '\n'
