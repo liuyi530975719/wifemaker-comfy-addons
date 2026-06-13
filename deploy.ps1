@@ -1,5 +1,5 @@
 # =========================================================================
-# deploy.ps1 — one-shot ComfyUI server bootstrap for Windows (dual-GPU)
+# deploy.ps1 -- one-shot ComfyUI server bootstrap for Windows (dual-GPU)
 #
 # Designed for the dual RTX PRO 6000 Blackwell box but auto-detects GPU count.
 #
@@ -12,7 +12,7 @@
 #       -R2SecretKey '520e9d10a4d382f6f707b74f55bb61c3e071355bfeb4c21cfa9b415bd0964cec' `
 #       -PullLoras
 #
-# Idempotent — safe to re-run if a phase fails. State lives under -InstallRoot.
+# Idempotent -- safe to re-run if a phase fails. State lives under -InstallRoot.
 #
 # Phases:
 #   1. Preflight (admin, driver, GPU count, Python/Git)
@@ -34,7 +34,7 @@ param(
     # CF Tunnel token for `cloudflared service install`. Skip CF setup if empty.
     [string]$CFTunnelToken = '',
 
-    # Subdomains — one per GPU. If not given, auto-named pro6000a..b..c..
+    # Subdomains -- one per GPU. If not given, auto-named pro6000a..b..c..
     [string[]]$Subdomains = @('pro6000a.bestyiever.vip','pro6000b.bestyiever.vip'),
 
     # Per-GPU local ports.  Defaults match the Linux fleet (8190, 8189, 8188...).
@@ -77,7 +77,7 @@ function Invoke-Step($cmd) {
 }
 
 # ========================================================================
-# Phase 1 — Preflight
+# Phase 1 -- Preflight
 # ========================================================================
 Phase 1 'Preflight (admin, driver, Python, Git)'
 
@@ -101,7 +101,7 @@ try {
     Die "nvidia-smi not found or no GPUs. Install NVIDIA driver R555+ for Blackwell first."
 }
 
-# Driver version sanity check — Blackwell wants 555+
+# Driver version sanity check -- Blackwell wants 555+
 try {
     $drv = (& nvidia-smi --query-gpu=driver_version --format=csv,noheader)[0].Trim()
     $drvMajor = [int]($drv.Split('.')[0])
@@ -109,12 +109,12 @@ try {
     else { Ok "driver $drv looks Blackwell-ready" }
 } catch { Warn "could not parse driver version" }
 
-# Python 3.12 — install via winget if missing
+# Python 3.12 -- install via winget if missing
 function Ensure-Tool($name, $wingetId, $checkCmd) {
     $found = $false
     try { & $checkCmd 2>$null | Out-Null; if ($LASTEXITCODE -eq 0) { $found = $true } } catch {}
     if ($found) { Ok "$name already installed"; return }
-    Log "installing $name via winget…"
+    Log "installing $name via winget..."
     if ($DryRun) { return }
     & winget install --id $wingetId --silent --accept-source-agreements --accept-package-agreements
     if ($LASTEXITCODE -ne 0) { Die "winget install $wingetId failed" }
@@ -125,17 +125,17 @@ function Ensure-Tool($name, $wingetId, $checkCmd) {
 Ensure-Tool 'Python 3.12' 'Python.Python.3.12' 'python --version'
 Ensure-Tool 'Git'         'Git.Git'             'git --version'
 
-# Disk space — need ~200GB for full LoRA sync
+# Disk space -- need ~200GB for full LoRA sync
 $driveLetter = (Split-Path -Qualifier $InstallRoot).TrimEnd(':')
 $drv = Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue
 if ($drv) {
     $freeGB = [Math]::Round($drv.Free / 1GB, 1)
     Ok "$($driveLetter): drive has $freeGB GB free"
-    if ($PullLoras -and $freeGB -lt 200) { Warn "less than 200GB free — full LoRA sync may not fit" }
+    if ($PullLoras -and $freeGB -lt 200) { Warn "less than 200GB free -- full LoRA sync may not fit" }
 } else { Warn "could not check drive space" }
 
 # ========================================================================
-# Phase 2 — Layout + clone ComfyUI
+# Phase 2 -- Layout + clone ComfyUI
 # ========================================================================
 Phase 2 'Clone ComfyUI'
 
@@ -151,7 +151,7 @@ foreach ($d in @($InstallRoot, $LogsDir, $ToolsDir, $ScriptsDir)) {
 Ok "layout under $InstallRoot"
 
 if (Test-Path (Join-Path $ComfyDir '.git')) {
-    Ok 'ComfyUI already cloned — pulling latest'
+    Ok 'ComfyUI already cloned -- pulling latest'
     if (-not $DryRun) { Push-Location $ComfyDir; git pull --rebase 2>&1 | Out-Host; Pop-Location }
 } else {
     Log "git clone ComfyUI -> $ComfyDir"
@@ -159,7 +159,7 @@ if (Test-Path (Join-Path $ComfyDir '.git')) {
 }
 
 # ========================================================================
-# Phase 3 — Python venv + PyTorch (cu126 for Blackwell SM_120) + requirements
+# Phase 3 -- Python venv + PyTorch (cu126 for Blackwell SM_120) + requirements
 # ========================================================================
 Phase 3 'Python venv + PyTorch + requirements'
 
@@ -173,11 +173,11 @@ $Pip   = Join-Path $VenvDir 'Scripts\pip.exe'
 Log 'upgrade pip + install PyTorch cu126 (Blackwell-compatible)'
 if (-not $DryRun) {
     & $Py -m pip install --upgrade pip wheel setuptools
-    # PyTorch 2.6+ with CUDA 12.6 wheels — has full SM_120 (Blackwell) kernels.
+    # PyTorch 2.6+ with CUDA 12.6 wheels -- has full SM_120 (Blackwell) kernels.
     & $Pip install --upgrade torch torchvision torchaudio `
         --index-url https://download.pytorch.org/whl/cu126
     if ($LASTEXITCODE -ne 0) {
-        Warn 'cu126 wheel install failed — falling back to cu124'
+        Warn 'cu126 wheel install failed -- falling back to cu124'
         & $Pip install --upgrade torch torchvision torchaudio `
             --index-url https://download.pytorch.org/whl/cu124
     }
@@ -199,9 +199,9 @@ if (-not $DryRun) {
 }
 
 # ========================================================================
-# Phase 4 — Custom nodes (public packs + private addons)
+# Phase 4 -- Custom nodes (public packs + private addons)
 # ========================================================================
-Phase 4 'Custom nodes — public packs + private addons'
+Phase 4 'Custom nodes -- public packs + private addons'
 
 $CustomNodes = Join-Path $ComfyDir 'custom_nodes'
 if (-not (Test-Path $CustomNodes)) { New-Item -ItemType Directory -Path $CustomNodes -Force | Out-Null }
@@ -230,7 +230,7 @@ foreach ($url in $PublicNodes) {
     }
 }
 
-# Private addons — clone wifemaker-comfy-addons, then symlink the two node folders
+# Private addons -- clone wifemaker-comfy-addons, then symlink the two node folders
 $AddonsTmp = Join-Path $env:TEMP 'wifemaker-comfy-addons'
 if (Test-Path $AddonsTmp) { Remove-Item -Recurse -Force $AddonsTmp }
 if (-not $DryRun) {
@@ -249,7 +249,7 @@ if (-not $DryRun) {
 }
 
 # ========================================================================
-# Phase 5 — rclone + R2 LoRA sync (optional)
+# Phase 5 -- rclone + R2 LoRA sync (optional)
 # ========================================================================
 Phase 5 'rclone install + R2 LoRA sync'
 
@@ -259,7 +259,7 @@ if ($PullLoras) {
     }
     $RcloneExe = Join-Path $ToolsDir 'rclone.exe'
     if (-not (Test-Path $RcloneExe)) {
-        Log 'downloading rclone for Windows…'
+        Log 'downloading rclone for Windows...'
         $zip = Join-Path $env:TEMP 'rclone.zip'
         if (-not $DryRun) {
             Invoke-WebRequest -UseBasicParsing 'https://downloads.rclone.org/rclone-current-windows-amd64.zip' -OutFile $zip
@@ -306,18 +306,18 @@ acl = private
     }
     Ok 'LoRA sync complete'
 } else {
-    Warn 'PullLoras flag not set — skipping LoRA sync (you can run this phase again later)'
+    Warn 'PullLoras flag not set -- skipping LoRA sync (you can run this phase again later)'
 }
 
 # ========================================================================
-# Phase 6 — Generate dual-GPU start script
+# Phase 6 -- Generate dual-GPU start script
 # ========================================================================
 Phase 6 "Generate start_comfy.ps1 (one process per GPU)"
 
 $startPs1 = Join-Path $ScriptsDir 'start_comfy.ps1'
 
 $sb = New-Object System.Text.StringBuilder
-[void]$sb.AppendLine('# Auto-generated by deploy.ps1 — starts one ComfyUI process per GPU.')
+[void]$sb.AppendLine('# Auto-generated by deploy.ps1 -- starts one ComfyUI process per GPU.')
 [void]$sb.AppendLine('# Each process pins a single GPU via CUDA_VISIBLE_DEVICES + its own user dir')
 [void]$sb.AppendLine('# (output / temp / user_settings) so they do not stomp each other on disk.')
 [void]$sb.AppendLine('$ErrorActionPreference = ''Stop''')
@@ -358,16 +358,16 @@ Get-CimInstance Win32_Process |
 Ok "wrote $stopPs1"
 
 # ========================================================================
-# Phase 7 — cloudflared service install
+# Phase 7 -- cloudflared service install
 # ========================================================================
 Phase 7 'cloudflared install + service'
 
 if ($SkipCFTunnel -or (-not $CFTunnelToken)) {
-    Warn 'CF tunnel skipped — bring your own networking (port-forward, Tailscale, etc.)'
+    Warn 'CF tunnel skipped -- bring your own networking (port-forward, Tailscale, etc.)'
 } else {
     $CloudflaredExe = Join-Path $ToolsDir 'cloudflared.exe'
     if (-not (Test-Path $CloudflaredExe)) {
-        Log 'downloading cloudflared.exe…'
+        Log 'downloading cloudflared.exe...'
         if (-not $DryRun) {
             Invoke-WebRequest -UseBasicParsing `
                 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe' `
@@ -389,7 +389,7 @@ if ($SkipCFTunnel -or (-not $CFTunnelToken)) {
 }
 
 # ========================================================================
-# Phase 8 — Task Scheduler autostart
+# Phase 8 -- Task Scheduler autostart
 # ========================================================================
 Phase 8 'Register Task Scheduler autostart'
 
@@ -408,9 +408,9 @@ if (-not $DryRun) {
 }
 
 # ========================================================================
-# Phase 9 — Final summary + fleet registration cheatsheet
+# Phase 9 -- Final summary + fleet registration cheatsheet
 # ========================================================================
-Phase 9 'Done — fleet registration cheatsheet'
+Phase 9 'Done -- fleet registration cheatsheet'
 
 Write-Host ''
 Write-Host '=================================================================' -ForegroundColor Green
@@ -426,7 +426,7 @@ for ($i = 0; $i -lt $gpuCount; $i++) {
     Write-Host "  Get-Content -Wait '$LogsDir\comfy_$tag.log'"
 }
 Write-Host ''
-Write-Host 'CloudFlare dashboard — add these public hostnames to your tunnel:' -ForegroundColor Yellow
+Write-Host 'CloudFlare dashboard -- add these public hostnames to your tunnel:' -ForegroundColor Yellow
 for ($i = 0; $i -lt $gpuCount; $i++) {
     $port = $PortStart - $i
     $sub  = if ($i -lt $Subdomains.Count) { $Subdomains[$i] } else { "pro6000$([char](97+$i)).bestyiever.vip" }
