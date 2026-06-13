@@ -59,8 +59,18 @@ param(
     [switch]$DryRun
 )
 
-$ErrorActionPreference = 'Stop'
+# Use 'Continue' rather than 'Stop' because PowerShell 5.1 mis-classifies
+# native commands' stderr (git's "Cloning into..." progress, pip's status
+# lines, rclone's transfer reports) as terminating errors under 'Stop'.
+# We rely on explicit $LASTEXITCODE checks + Die() for fatal failures.
+$ErrorActionPreference = 'Continue'
+# PS 7+ honours this; PS 5.1 ignores it (no-op).
+if ($PSVersionTable.PSVersion.Major -ge 7) { $PSNativeCommandUseErrorActionPreference = $false }
 Set-StrictMode -Version Latest
+
+function Check-Native($what) {
+    if ($LASTEXITCODE -ne 0) { Die "$what failed (exit $LASTEXITCODE)" }
+}
 
 # ----- Pretty logging ---------------------------------------------------- #
 function Phase($n, $msg) { Write-Host ("`n=== Phase {0}: {1} ===" -f $n, $msg) -ForegroundColor Cyan }
@@ -200,10 +210,17 @@ Ok "layout under $InstallRoot"
 
 if (Test-Path (Join-Path $ComfyDir '.git')) {
     Ok 'ComfyUI already cloned -- pulling latest'
-    if (-not $DryRun) { Push-Location $ComfyDir; git pull --rebase 2>&1 | Out-Host; Pop-Location }
+    if (-not $DryRun) {
+        Push-Location $ComfyDir
+        git pull --rebase 2>&1 | Out-Host
+        Pop-Location
+    }
 } else {
     Log "git clone ComfyUI -> $ComfyDir"
-    if (-not $DryRun) { git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git $ComfyDir }
+    if (-not $DryRun) {
+        git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git $ComfyDir 2>&1 | Out-Host
+        Check-Native 'git clone ComfyUI'
+    }
 }
 
 # ========================================================================
@@ -270,11 +287,14 @@ foreach ($url in $PublicNodes) {
         Ok "$name already cloned"
     } else {
         Log "git clone $name"
-        if (-not $DryRun) { git clone --depth 1 $url $tgt }
+        if (-not $DryRun) {
+            git clone --depth 1 $url $tgt 2>&1 | Out-Host
+            if ($LASTEXITCODE -ne 0) { Warn "git clone $name failed -- skipping its requirements" ; continue }
+        }
     }
     $req = Join-Path $tgt 'requirements.txt'
     if ((Test-Path $req) -and (-not $DryRun)) {
-        & $Pip install -r $req --no-deps 2>$null | Out-Host
+        & $Pip install -r $req --no-deps 2>&1 | Out-Host
     }
 }
 
@@ -282,7 +302,8 @@ foreach ($url in $PublicNodes) {
 $AddonsTmp = Join-Path $env:TEMP 'wifemaker-comfy-addons'
 if (Test-Path $AddonsTmp) { Remove-Item -Recurse -Force $AddonsTmp }
 if (-not $DryRun) {
-    git clone --depth 1 --branch $AddonsBranch $AddonsRepoUrl $AddonsTmp
+    git clone --depth 1 --branch $AddonsBranch $AddonsRepoUrl $AddonsTmp 2>&1 | Out-Host
+    Check-Native 'git clone wifemaker-comfy-addons'
     foreach ($n in @('comfy_model_uploader','comfy_lora_cleaner')) {
         $src = Join-Path $AddonsTmp $n
         $dst = Join-Path $CustomNodes $n
