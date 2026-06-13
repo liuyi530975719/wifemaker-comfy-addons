@@ -109,21 +109,69 @@ try {
     else { Ok "driver $drv looks Blackwell-ready" }
 } catch { Warn "could not parse driver version" }
 
-# Python 3.12 -- install via winget if missing
-function Ensure-Tool($name, $wingetId, $checkCmd) {
-    $found = $false
-    try { & $checkCmd 2>$null | Out-Null; if ($LASTEXITCODE -eq 0) { $found = $true } } catch {}
-    if ($found) { Ok "$name already installed"; return }
-    Log "installing $name via winget..."
-    if ($DryRun) { return }
-    & winget install --id $wingetId --silent --accept-source-agreements --accept-package-agreements
-    if ($LASTEXITCODE -ne 0) { Die "winget install $wingetId failed" }
-    # Refresh PATH in current session
-    $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')
-    Ok "$name installed"
+# Python + Git -- detect by RUNNING the tool and parsing output, not by
+# trusting Get-Command (the MS Store stub registers as a valid command) or
+# winget exit codes (winget returns non-zero when "already installed, no
+# upgrade needed" which is actually success for our purposes).
+
+function Test-PythonReal {
+    # Real Python prints "Python 3.x.y". MS Store stub prints "Python was not
+    # found; run without arguments to install from the Microsoft Store..."
+    try {
+        $out = (& python --version 2>&1 | Out-String).Trim()
+        return ($out -match '^Python \d+\.\d+\.\d+')
+    } catch { return $false }
 }
-Ensure-Tool 'Python 3.12' 'Python.Python.3.12' 'python --version'
-Ensure-Tool 'Git'         'Git.Git'             'git --version'
+
+function Test-Git {
+    try {
+        $out = (& git --version 2>&1 | Out-String).Trim()
+        return ($out -match '^git version')
+    } catch { return $false }
+}
+
+function Refresh-Path {
+    $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + `
+                [Environment]::GetEnvironmentVariable('Path','User')
+}
+
+# ---- Python ----
+if (Test-PythonReal) {
+    Ok "Python detected: $((& python --version 2>&1).Trim())"
+} else {
+    Log 'installing Python 3.12 via winget (this may take a minute)...'
+    if (-not $DryRun) {
+        & winget install --id Python.Python.3.12 --silent `
+            --accept-source-agreements --accept-package-agreements 2>&1 | Out-Host
+        # Ignore winget exit code entirely -- "already installed" returns non-zero
+        # but is fine. Refresh PATH and re-test.
+        Refresh-Path
+        if (-not (Test-PythonReal)) {
+            Die @"
+Python still not callable after winget install.
+This usually means the Microsoft Store 'python.exe' app-execution-alias is
+intercepting. Open: Settings -> Apps -> Advanced app settings ->
+App execution aliases. Turn OFF python.exe AND python3.exe. Then open a
+fresh admin PowerShell and re-run this script.
+"@
+        }
+        Ok "Python installed: $((& python --version 2>&1).Trim())"
+    }
+}
+
+# ---- Git ----
+if (Test-Git) {
+    Ok "Git detected: $((& git --version 2>&1).Trim())"
+} else {
+    Log 'installing Git via winget...'
+    if (-not $DryRun) {
+        & winget install --id Git.Git --silent `
+            --accept-source-agreements --accept-package-agreements 2>&1 | Out-Host
+        Refresh-Path
+        if (-not (Test-Git)) { Die 'Git still not callable after winget install.' }
+        Ok "Git installed: $((& git --version 2>&1).Trim())"
+    }
+}
 
 # Disk space -- need ~200GB for full LoRA sync
 $driveLetter = (Split-Path -Qualifier $InstallRoot).TrimEnd(':')
